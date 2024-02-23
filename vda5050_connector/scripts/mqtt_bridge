@@ -31,28 +31,18 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-import rclpy
+import rospy
 from vda5050_connector_py.mqtt_bridge import MQTTBridge
 
 
 def main(args=None):
-    rclpy.init(args=args)
 
     mqtt_bridge = MQTTBridge()
 
     try:
-        rclpy.spin(mqtt_bridge)
+        rospy.spin()
     except KeyboardInterrupt:
         pass
-    except BaseException:
-        raise
-    finally:
-        mqtt_bridge.on_shutdown()
-        # Destroy the node explicitly
-        # (optional - Done automatically when node is garbage collected)
-        mqtt_bridge.destroy_node()
-        rclpy.shutdown()
-
 
 if __name__ == "__main__":
     main()

@@ -15,17 +15,12 @@
 
   <license>BSD</license>
 
+  <build_depend>message_generation</build_depend>
+  <exec_depend>message_runtime</exec_depend>
 
-  <url type="website">https://www.vda.de/dam/vda/publications/2019/Logistik/VDA5050.pdf</url> -->
-  <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>rosidl_default_generators</buildtool_depend>
-  <exec_depend>rosidl_default_runtime</exec_depend>
+  <buildtool_depend>catkin</buildtool_depend>
 
   <depend>std_msgs</depend>
-  <member_of_group>rosidl_interface_packages</member_of_group>
 
-  <export>
-    <build_type>ament_cmake</build_type>
-  </export>
 
 </package>

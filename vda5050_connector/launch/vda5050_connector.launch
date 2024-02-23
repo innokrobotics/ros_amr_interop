@@ -1,0 +1,10 @@
+<launch>
+    <!-- Load the YAML file into the parameter server -->
+    <rosparam command="load" file="$(find vda5050_connector)/config/connector_example.yaml" />
+
+    <!-- Launch the mqtt_bridge node -->
+    <node pkg="vda5050_connector" type="mqtt_bridge" name="mqtt_bridge">
+    </node>
+    <node pkg="vda5050_connector" type="vda5050_controller" name="vda5050_controller">
+    </node>
+</launch>

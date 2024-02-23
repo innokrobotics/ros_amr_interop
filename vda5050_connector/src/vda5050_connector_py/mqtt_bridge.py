@@ -41,16 +41,19 @@ import ssl
 import os
 
 # ROS dependencies / utils
-from rclpy.node import Node
+import rospy
+
 
 from vda5050_connector_py.utils import get_vda5050_mqtt_topic
 from vda5050_connector_py.utils import get_vda5050_ros2_topic
 from vda5050_connector_py.utils import json_camel_to_snake_case
-from vda5050_connector_py.utils import read_str_parameter, read_int_parameter
+# from vda5050_connector_py.utils import read_str_parameter, read_int_parameter
 from vda5050_connector_py.utils import convert_ros_message_to_json
 from vda5050_connector_py.utils import get_vda5050_ts
 
-from vda5050_connector_py.vda5050_controller import DEFAULT_PROTOCOL_VERSION
+# Temporary fix to avoid importing DEFAULT_PROTOCOL_VERSION
+# from vda5050_connector_py.vda5050_controller import DEFAULT_PROTOCOL_VERSION
+DEFAULT_PROTOCOL_VERSION = "2.0.0"
 
 # ROS msgs / srvs / actions
 from vda5050_msgs.msg import Action as VDAAction
@@ -195,26 +198,23 @@ def generate_vda_instant_action_msg(instant_action):
     return vda_instant_action
 
 
-class MQTTBridge(Node):
+class MQTTBridge:
     """Translates VDA5050 MQTT messages from and to ROS2."""
 
     def __init__(self):
-        super().__init__(NODE_NAME)
-        self.logger = self.get_logger()
+        rospy.init_node(NODE_NAME)
 
         # Declare Node configuration parameter. Use default values if no parameters
         # are defined on launchfile. Provide the parameter when running the launchfile
         # by using ``foo.launch.py mqtt_address:=localhost mqtt_port:=1883 ...``
-        mqtt_address = read_str_parameter(self, "mqtt_address", "localhost")
-        mqtt_port = read_int_parameter(self, "mqtt_port", 1883)
-        mqtt_username = read_str_parameter(self, "mqtt_username", "")
-        mqtt_password = read_str_parameter(self, "mqtt_password", "")
+        mqtt_address = rospy.get_param("mqtt_address", "localhost")
+        mqtt_port = rospy.get_param("mqtt_port", 1883)
+        mqtt_username = rospy.get_param("mqtt_username", "")
+        mqtt_password = rospy.get_param("mqtt_password", "")
 
-        self._manufacturer_name = read_str_parameter(
-            self, "manufacturer_name", "robots"
-        )
-        self._serial_number = read_str_parameter(self, "serial_number", "robot_1")
-        self._vda5050_major_version = read_str_parameter(self, "vda5050_major_version", "v2")
+        self._manufacturer_name = rospy.get_param("manufacturer_name", "robots")
+        self._serial_number = rospy.get_param("serial_number", "robot_1")
+        self._vda5050_major_version = rospy.get_param("vda5050_major_version", "v2")
 
         # Configure MQTT
         self.mqtt_client = mqtt_client.Client(callback_api_version=mqtt_client.CallbackAPIVersion.VERSION1)
@@ -269,12 +269,12 @@ class MQTTBridge(Node):
 
         self.on_configure()
 
-        self.logger.info(f"Node {NODE_NAME} has started successfully.")
+        rospy.loginfo(f"Node {NODE_NAME} has started successfully.")
 
     def on_connect_mqtt(self, client, userdata, flags, rc):
         """MQTT client connect callback."""
         if rc == 0:
-            self.logger.info("Connected to MQTT Broker!")
+            rospy.loginfo("Connected to MQTT Broker!")
             self.mqtt_client.subscribe(
                 get_vda5050_mqtt_topic(
                     manufacturer=self._manufacturer_name,
@@ -292,7 +292,7 @@ class MQTTBridge(Node):
                 )
             )
             self._publish_connection(
-                msg=VDAConnection(
+                VDAConnection(
                     header_id=0,
                     version=DEFAULT_PROTOCOL_VERSION,
                     timestamp=get_vda5050_ts(),
@@ -303,26 +303,26 @@ class MQTTBridge(Node):
             )
 
         else:
-            self.logger.error("Failed to connect, return code %d\n", rc)
+            rospy.logerr("Failed to connect, return code %d\n", rc)
 
     def on_message_mqtt(self, client, userdata, msg):
         """MQTT client message callback."""
         try:
             msg_json = json_camel_to_snake_case(msg.payload)
-            self.logger.debug(f"Received '{msg_json}' from '{msg.topic}' topic")
+            rospy.logdebug(f"Received '{msg_json}' from '{msg.topic}' topic")
         except json.decoder.JSONDecodeError:
-            self.logger.error(f"Failed to decode message: '{msg.payload}'")
+            rospy.logerr(f"Failed to decode message: '{msg.payload}'")
             return
 
         try:
             if msg.topic.endswith("order"):
                 vda_order_msg = VDAOrder(**generate_vda_order_msg(msg_json))
-                self._order_pub.publish(msg=vda_order_msg)
+                self._order_pub.publish(vda_order_msg)
             if msg.topic.endswith("instantActions"):
                 vda_instant_actions_message = VDAInstantActions(
                     **generate_vda_instant_action_msg(msg_json)
                 )
-                self._instant_actions_pub.publish(msg=vda_instant_actions_message)
+                self._instant_actions_pub.publish(vda_instant_actions_message)
         except KeyError as ex:
             self.logger.warn(f"Ignoring invalid VDA5050 message: {ex}.")
             return
@@ -330,7 +330,7 @@ class MQTTBridge(Node):
     def on_disconnect_mqtt(self, client, userdata, rc):
         """MQTT client disconnect callback."""
         if rc != 0:
-            self.logger.info(
+            rospy.loginfo(
                 f"MQTT client disconnected (rc: {rc}, {error_string(rc)}). Trying to reconnect."
             )
             while not self.mqtt_client.is_connected():
@@ -339,7 +339,7 @@ class MQTTBridge(Node):
                 except OSError:
                     pass
         else:
-            self.logger.info("Disconnected from MQTT Broker!")
+            rospy.loginfo("Disconnected from MQTT Broker!")
 
     def on_configure(self):
         """
@@ -348,69 +348,69 @@ class MQTTBridge(Node):
         This method registers callbacks for translating
         ROS2 messages to VDA5050 MQTT messages.
         """
-        self.logger.info("Configuring ROS topics")
-        self._state_sub = self.create_subscription(
-            msg_type=VDAOrderState,
-            topic=get_vda5050_ros2_topic(
+        rospy.loginfo("Configuring ROS topics")
+        self._state_sub = rospy.Subscriber(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="state",
                 major_version=self._vda5050_major_version
             ),
-            callback=self._publish_state,
-            qos_profile=10,
+            VDAOrderState,
+            self._publish_state,
+            queue_size=10,
         )
 
-        self._connection_sub = self.create_subscription(
-            msg_type=VDAConnection,
-            topic=get_vda5050_ros2_topic(
+        self._connection_sub = rospy.Subscriber(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="connection",
                 major_version=self._vda5050_major_version,
-            ),
-            callback=self._publish_connection,
-            qos_profile=10,
+            ),        
+            VDAConnection,
+            self._publish_connection,
+            queue_size=10,
         )
 
-        self._visualization_sub = self.create_subscription(
-            msg_type=VDAVisualization,
-            topic=get_vda5050_ros2_topic(
+        self._visualization_sub = rospy.Subscriber(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="visualization",
                 major_version=self._vda5050_major_version,
             ),
+            VDAVisualization,
             callback=self._publish_visualization,
-            qos_profile=10,
+            queue_size=10,
         )
 
-        self._order_pub = self.create_publisher(
-            msg_type=VDAOrder,
-            topic=get_vda5050_ros2_topic(
+        self._order_pub = rospy.Publisher(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="order",
                 major_version=self._vda5050_major_version,
             ),
-            qos_profile=10,
+            VDAOrder,
+            queue_size=10,
         )
 
-        self._instant_actions_pub = self.create_publisher(
-            msg_type=VDAInstantActions,
-            topic=get_vda5050_ros2_topic(
+        self._instant_actions_pub = rospy.Publisher(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="instantActions",
                 major_version=self._vda5050_major_version,
             ),
-            qos_profile=10,
+            VDAInstantActions,
+            queue_size=10,
         )
-        self.logger.info("Finished configuring ROS topics")
+        rospy.loginfo("Finished configuring ROS topics")
 
     def on_shutdown(self):
         """Perform all necessary teardown steps."""
-        self.logger.info("Publishing offline Connection message")
+        rospy.loginfo("Publishing offline Connection message")
 
         offline_message = VDAConnection(
             header_id=0,
@@ -425,9 +425,9 @@ class MQTTBridge(Node):
         if self._last_connection_msg:
             offline_message.header_id = self._last_connection_msg.header_id + 1
 
-        self._publish_connection(msg=offline_message)
+        self._publish_connection(offline_message)
 
-        self.logger.info("Unsubscribing from MQTT topics")
+        rospy.loginfo("Unsubscribing from MQTT topics")
         self.mqtt_client.unsubscribe(
             get_vda5050_mqtt_topic(
                 manufacturer=self._manufacturer_name,
@@ -458,7 +458,7 @@ class MQTTBridge(Node):
 
         """
         json_msg = convert_ros_message_to_json(msg)
-        self.logger.debug(f"Publishing MQTT message to topic {topic}: {json_msg}")
+        rospy.logdebug(f"Publishing MQTT message to topic {topic}: {json_msg}")
         self.mqtt_client.publish(topic, json_msg)
 
     def _publish_state(self, msg: VDAOrderState):

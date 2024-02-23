@@ -34,10 +34,13 @@
 from datetime import datetime
 import re
 import json
-from rclpy.node import Node
-from rcl_interfaces.msg import ParameterDescriptor
-from rcl_interfaces.msg import ParameterType
-from rosidl_runtime_py import message_to_ordereddict
+import rospy
+# from rcl_interfaces.msg import ParameterDescriptor
+# from rcl_interfaces.msg import ParameterType
+
+# from rosidl_runtime_py import message_to_ordereddict
+from rospy_message_converter import json_message_converter
+from collections import OrderedDict
 
 
 def get_vda5050_ts():
@@ -58,59 +61,59 @@ def get_vda5050_ts():
     return f"{ts}Z"
 
 
-def read_bool_parameter(node: Node, param_name: str, alternative: bool) -> bool:
-    """Declare and read a bool parameter."""
-    node.declare_parameter(
-        param_name,
-        descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_BOOL),
-        value=alternative,
-    )
-    param = node.get_parameter(param_name)
-    return param if type(param) == bool else param.get_parameter_value().bool_value
+# def read_bool_parameter(node: Node, param_name: str, alternative: bool) -> bool:
+#     """Declare and read a bool parameter."""
+#     node.declare_parameter(
+#         param_name,
+#         descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_BOOL),
+#         value=alternative,
+#     )
+#     param = node.get_parameter(param_name)
+#     return param if type(param) == bool else param.get_parameter_value().bool_value
 
 
-def read_str_parameter(node: Node, param_name: str, alternative: str) -> str:
-    """Declare and read a string parameter."""
-    node.declare_parameter(
-        param_name,
-        descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING),
-        value=alternative,
-    )
-    param = node.get_parameter(param_name)
-    return param if type(param) == str else param.get_parameter_value().string_value
+# def read_str_parameter(node: Node, param_name: str, alternative: str) -> str:
+#     """Declare and read a string parameter."""
+#     node.declare_parameter(
+#         param_name,
+#         descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING),
+#         value=alternative,
+#     )
+#     param = node.get_parameter(param_name)
+#     return param if type(param) == str else param.get_parameter_value().string_value
 
 
-def read_int_parameter(node: Node, param_name: str, alternative: int) -> int:
-    """Declare and read a int parameter."""
-    node.declare_parameter(
-        param_name,
-        descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER),
-        value=alternative,
-    )
-    param = node.get_parameter(param_name)
-    return param if type(param) == int else param.get_parameter_value().integer_value
+# def read_int_parameter(node: Node, param_name: str, alternative: int) -> int:
+#     """Declare and read a int parameter."""
+#     node.declare_parameter(
+#         param_name,
+#         descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER),
+#         value=alternative,
+#     )
+#     param = node.get_parameter(param_name)
+#     return param if type(param) == int else param.get_parameter_value().integer_value
 
 
-def read_double_parameter(node: Node, param_name: str, alternative: float) -> float:
-    """Declare and read a double (float) parameter."""
-    node.declare_parameter(
-        param_name,
-        descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE),
-        value=alternative,
-    )
-    param = node.get_parameter(param_name)
-    return param if type(param) == float else param.get_parameter_value().double_value
+# def read_double_parameter(node: Node, param_name: str, alternative: float) -> float:
+#     """Declare and read a double (float) parameter."""
+#     node.declare_parameter(
+#         param_name,
+#         descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE),
+#         value=alternative,
+#     )
+#     param = node.get_parameter(param_name)
+#     return param if type(param) == float else param.get_parameter_value().double_value
 
 
-def read_str_array_parameter(node: Node, param_name: str, alternative: list) -> list:
-    """Declare and read a string array parameter."""
-    node.declare_parameter(
-        param_name,
-        descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING_ARRAY),
-        value=alternative,
-    )
-    param = node.get_parameter(param_name)
-    return param if type(param) == list else param.get_parameter_value().string_array_value
+# def read_str_array_parameter(node: Node, param_name: str, alternative: list) -> list:
+#     """Declare and read a string array parameter."""
+#     node.declare_parameter(
+#         param_name,
+#         descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING_ARRAY),
+#         value=alternative,
+#     )
+#     param = node.get_parameter(param_name)
+#     return param if type(param) == list else param.get_parameter_value().string_array_value
 
 
 def json_camel_to_snake_case(s):
@@ -216,7 +219,8 @@ def convert_ros_message_to_json(msg):
         dict: JSON representation of the ROS2 msg
 
     """
-    json_msg = json.dumps(message_to_ordereddict(msg))
+    json_msg = json_message_converter.convert_ros_message_to_json(msg)
+
     return json.dumps(json_snake_to_camel_case(json_msg))
 
 

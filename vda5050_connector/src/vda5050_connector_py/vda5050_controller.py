@@ -37,18 +37,21 @@ import itertools
 import functools
 
 # ROS dependencies / utils
-from rclpy.action import ActionClient
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from rclpy.node import Node
-from rclpy.task import Future
+# from rclpy.action import ActionClient
+# from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+# from rclpy.node import Node
+# from rclpy.task import Future
+
+import rospy
+import actionlib
 
 from vda5050_connector_py.utils import get_vda5050_ros2_topic
 from vda5050_connector_py.utils import get_vda5050_ts
-from vda5050_connector_py.utils import read_bool_parameter
-from vda5050_connector_py.utils import read_double_parameter
-from vda5050_connector_py.utils import read_int_parameter
-from vda5050_connector_py.utils import read_str_array_parameter
-from vda5050_connector_py.utils import read_str_parameter
+# from vda5050_connector_py.utils import read_bool_parameter
+# from vda5050_connector_py.utils import read_double_parameter
+# from vda5050_connector_py.utils import read_int_parameter
+# from vda5050_connector_py.utils import read_str_array_parameter
+# from vda5050_connector_py.utils import rospy.get_param
 
 # ROS msgs / srvs / actions
 from vda5050_msgs.msg import Action as VDAAction
@@ -81,11 +84,14 @@ from vda5050_msgs.msg import TypeSpecification as VDATypeSpecification
 from vda5050_msgs.msg import Visualization as VDAVisualization
 from vda5050_msgs.msg import WheelDefinition as VDAWheelDefinition
 
-from vda5050_connector.srv import GetState
-from vda5050_connector.srv import SupportedActions
+from vda5050_connector.srv import GetState, GetStateRequest, GetStateResponse
+from vda5050_connector.srv import SupportedActions, SupportedActionsRequest, SupportedActionsResponse
 
-from vda5050_connector.action import NavigateToNode
-from vda5050_connector.action import ProcessVDAAction
+from vda5050_connector.msg import NavigateToNodeAction, NavigateToNodeGoal, NavigateToNodeFeedback, NavigateToNodeResult
+from vda5050_connector.msg import ProcessVDAActionAction, ProcessVDAActionGoal, ProcessVDAActionFeedback, ProcessVDAActionResult
+
+
+from asyncio import Future
 
 # Constants
 DEFAULT_NODE_NAME = "controller"
@@ -130,16 +136,14 @@ class OrderAcceptModes(Enum):
     STITCH = 2
 
 
-class VDA5050Controller(Node):
+class VDA5050Controller:
     """ROS2 <> VDA5050 Connector: Controller node."""
 
     def __init__(self, **kwargs):
-        super().__init__(node_name=DEFAULT_NODE_NAME, namespace=DEFAULT_NAMESPACE, **kwargs)
-
-        self.logger = self.get_logger()
+        rospy.init_node(DEFAULT_NODE_NAME)
         self.on_configure()
 
-        self.logger.info("Node {} has started successfully.".format(DEFAULT_NODE_NAME))
+        rospy.loginfo("Node {} has started successfully.".format(DEFAULT_NODE_NAME))
 
     # Configure
 
@@ -157,8 +161,8 @@ class VDA5050Controller(Node):
             manufacturer=self._manufacturer_name,
             serial_number=self._serial_number,
             last_node_id=self._starting_node_id,
-            operating_mode=VDAOrderState.AUTOMATIC,
-            safety_state=VDASafetyState(e_stop=VDASafetyState.NONE, field_violation=False),
+            operating_mode=VDAOrderState.AUTOMATIC.strip('"'),
+            safety_state=VDASafetyState(e_stop=VDASafetyState.NONE.strip('"'), field_violation=False),
         )
         self._current_connection = VDAConnection(
             header_id=0,
@@ -191,217 +195,199 @@ class VDA5050Controller(Node):
     def _read_parameters(self):
         """Read and load ROS parameters."""
         # Robot information
-        self._robot_name = read_str_parameter(self, "robot_name", DEFAULT_ROBOT_NAME)
-        self._starting_node_id = read_str_parameter(self, "starting_node_id",
+        self._robot_name = rospy.get_param("robot_name", DEFAULT_ROBOT_NAME)
+        self._starting_node_id = rospy.get_param("starting_node_id",
                                                     DEFAULT_STARTING_NODE_ID)
-        self._manufacturer_name = read_str_parameter(
-            self, "manufacturer_name", DEFAULT_MANUFACTURER_NAME
-        )
-        self._serial_number = read_str_parameter(self, "serial_number", DEFAULT_SERIAL_NUMBER)
-        self._protocol_version = read_str_parameter(
-            self, "protocol_version", DEFAULT_PROTOCOL_VERSION
-        )
+        self._manufacturer_name = rospy.get_param("manufacturer_name", DEFAULT_MANUFACTURER_NAME)
+        self._serial_number = rospy.get_param("serial_number", DEFAULT_SERIAL_NUMBER)
+        self._protocol_version = rospy.get_param("protocol_version", DEFAULT_PROTOCOL_VERSION)
+        
         # ROS interfaces names
-        self._get_state_svc_name = read_str_parameter(
-            self, "get_state_svc_name", DEFAULT_GET_STATE_SVC_NAME
-        )
-        self._supported_actions_svc_name = read_str_parameter(
-            self, "supported_actions_svc_name", DEFAULT_SUPPORTED_ACTIONS_SVC_NAME
-        )
-        self._vda_action_act_name = read_str_parameter(
-            self, "vda_action_act_name", DEFAULT_VDA_ACTION_ACT_NAME
-        )
-        self._nav_to_node_act_name = read_str_parameter(
-            self, "nav_to_node_act_name", DEFAULT_NAV_TO_NODE_ACT_NAME
-        )
+        self._get_state_svc_name = rospy.get_param("get_state_svc_name", DEFAULT_GET_STATE_SVC_NAME)
+        self._supported_actions_svc_name = rospy.get_param("supported_actions_svc_name", DEFAULT_SUPPORTED_ACTIONS_SVC_NAME)
+        self._vda_action_act_name = rospy.get_param("vda_action_act_name", DEFAULT_VDA_ACTION_ACT_NAME)
+        self._nav_to_node_act_name = rospy.get_param("nav_to_node_act_name", DEFAULT_NAV_TO_NODE_ACT_NAME
+                                                     )
         # Timer periods
-        self._state_pub_period = read_double_parameter(
-            self, "state_pub_period", DEFAULT_STATE_PUB_PERIOD
-        )
-        self._connection_pub_period = read_double_parameter(
-            self, "connection_pub_period", DEFAULT_CONNECTION_PUB_PERIOD
-        )
-        self._visualization_pub_period = read_double_parameter(
-            self, "visualization_pub_period", DEFAULT_VISUALIZATION_PUB_PERIOD
-        )
-        self._execute_order_period = read_double_parameter(
-            self, "execute_order_period", DEFAULT_EXECUTE_ORDER_PERIOD
-        )
+        self._state_pub_period = rospy.get_param("state_pub_period", DEFAULT_STATE_PUB_PERIOD)
+        self._connection_pub_period = rospy.get_param("connection_pub_period", DEFAULT_CONNECTION_PUB_PERIOD)
+        self._visualization_pub_period = rospy.get_param("visualization_pub_period", DEFAULT_VISUALIZATION_PUB_PERIOD)
+        self._execute_order_period = rospy.get_param("execute_order_period", DEFAULT_EXECUTE_ORDER_PERIOD)
 
     # ---- Configure ROS interfaces ----
 
     def _configure_action_clients(self):
         """Configure Controller <> Adapter ROS Action interfaces."""
         base_interface_name = (
-            f"{self.get_namespace()}/{self._manufacturer_name}/{self._robot_name}/"
+            f"{rospy.get_namespace()}{self._manufacturer_name}/{self._robot_name}/"
         )
         # Action client for sending NavigateToNode goals to adapter
-        self._navigate_to_node_act_cli = ActionClient(
-            node=self,
-            action_type=NavigateToNode,
-            action_name=base_interface_name + self._nav_to_node_act_name,
+        self._navigate_to_node_act_cli = actionlib.SimpleActionClient(
+            base_interface_name + self._nav_to_node_act_name,
+            NavigateToNodeAction,
         )
-        while not self._navigate_to_node_act_cli.wait_for_server(timeout_sec=1.0):
-            self.logger.error(
-                "NavigateToNode adapter action server not available, waiting again..."
-            )
+        rospy.loginfo("Waiting for NavigateToNode adapter action server to become available ...")
+        self._navigate_to_node_act_cli.wait_for_server()
+        rospy.loginfo("NavigateToNode adapter action server online")
+        
         self._navigate_to_node_goal_handle = None
-
+        
         # Action client for sending ProcessVDAAction goals to adapter
-        self._process_vda_action_act_cli = ActionClient(
-            node=self,
-            action_type=ProcessVDAAction,
-            action_name=base_interface_name + self._vda_action_act_name,
+        self._process_vda_action_act_cli = actionlib.SimpleActionClient(
+            base_interface_name + self._nav_to_node_act_name,
+            ProcessVDAActionAction,
         )
-        while not self._process_vda_action_act_cli.wait_for_server(timeout_sec=1.0):
-            self.logger.error(
-                "ProcessVDAAction adapter action server not available, waiting again..."
-            )
+        rospy.loginfo("Waiting for ProcessVDAAction adapter action server to become available ...")
+        self._process_vda_action_act_cli.wait_for_server()
+        rospy.loginfo("ProcessVDAAction adapter action server online")
+
         self._process_vda_action_goal_handle_dict = {}
 
     def _configure_service_clients(self):
         """Configure Controller <> Adapter ROS Service interfaces."""
         base_interface_name = (
-            f"{self.get_namespace()}/{self._manufacturer_name}/{self._robot_name}/"
+            f"{rospy.get_namespace()}{self._manufacturer_name}/{self._robot_name}/"
         )
         # Service client to request GetState from the adapter
-        self._get_adapter_state_svc_cli = self.create_client(
-            srv_type=GetState,
-            srv_name=base_interface_name + self._get_state_svc_name,
-            callback_group=MutuallyExclusiveCallbackGroup(),
+        self._get_adapter_state_svc_cli = rospy.ServiceProxy(
+            base_interface_name + self._get_state_svc_name,
+            GetState
         )
-        while not self._get_adapter_state_svc_cli.wait_for_service(timeout_sec=1.0):
-            self.logger.error("GetState adapter service not available, waiting again...")
+        rospy.loginfo("Waiting for GetState adapter service to become available ...")
+        self._get_adapter_state_svc_cli.wait_for_service()
+        rospy.loginfo("GetState adapter service is online")
 
         # Service client to request SupportedActions from the adapter
-        self._supported_actions_svc_cli = self.create_client(
-            srv_type=SupportedActions,
-            srv_name=base_interface_name + self._supported_actions_svc_name,
-            callback_group=MutuallyExclusiveCallbackGroup(),
+        self._supported_actions_svc_cli = rospy.ServiceProxy(
+            base_interface_name + self._supported_actions_svc_name,
+            SupportedActions
         )
-        while not self._supported_actions_svc_cli.wait_for_service(timeout_sec=1.0):
-            self.logger.error("SupportedActions adapter service not available, waiting again...")
+        rospy.loginfo("Waiting for SupportedActions adapter service to become available ...")
+        self._supported_actions_svc_cli.wait_for_service()
+        rospy.loginfo("SupportedActions adapter service is online")
 
     def _configure_subscriptions(self):
         """Configure Master Control to Robot topic msgs."""
         # Process orders coming from the Master Control
-        self._process_order_sub = self.create_subscription(
-            msg_type=VDAOrder,
-            topic=get_vda5050_ros2_topic(
+        self._process_order_sub = rospy.Subscriber(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="order",
                 major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
-            callback=self.process_order,
-            qos_profile=10,
+            VDAOrder,
+            self.process_order,
+            queue_size=10,
         )
 
         # Process instant actions coming from the Master Control
-        self._process_instant_actions_sub = self.create_subscription(
-            msg_type=VDAInstantActions,
-            topic=get_vda5050_ros2_topic(
+        self._process_instant_actions_sub = rospy.Subscriber(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="instantActions",
                 major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
-            callback=self.process_instant_actions,
-            qos_profile=10,
+            VDAInstantActions,
+            self.process_instant_actions,
+            queue_size=10,
         )
 
     def _configure_publishers(self):
         """Configure Robot to Master Control topic msgs."""
         # Publish state messages to the Master Control
-        self._publish_state_to_mc = self.create_publisher(
-            msg_type=VDAOrderState,
-            topic=get_vda5050_ros2_topic(
+        self._publish_state_to_mc = rospy.Publisher(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="state",
                 major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
-            qos_profile=10,
+            VDAOrderState,
+            queue_size=10,
         )
 
         # Publish connection messages to the Master Control
-        self._publish_connection_to_mc = self.create_publisher(
-            msg_type=VDAConnection,
-            topic=get_vda5050_ros2_topic(
+        self._publish_connection_to_mc = rospy.Publisher(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="connection",
                 major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
-            qos_profile=10,
+            VDAConnection,
+            queue_size=10,
         )
 
         # Publish visualization messages to the Master Control
-        self._publish_visualization_to_mc = self.create_publisher(
-            msg_type=VDAVisualization,
-            topic=get_vda5050_ros2_topic(
+        self._publish_visualization_to_mc = rospy.Publisher(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="visualization",
                 major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
-            qos_profile=10,
+            VDAVisualization,
+            queue_size=10,
         )
 
         # Publish visualization messages to the Master Control
-        self._publish_factsheet_to_mc = self.create_publisher(
-            msg_type=VDAFactsheet,
-            topic=get_vda5050_ros2_topic(
+        self._publish_factsheet_to_mc = rospy.Publisher(
+            get_vda5050_ros2_topic(
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="factsheet",
                 major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
-            qos_profile=10,
+            VDAFactsheet,
+            queue_size=10,
         )
 
     def _configure_timers(self):
         """Configure periodic timers for Robot to Master Control msgs."""
         # Publish state msg periodically
-        self._state_publisher_timer = self.create_timer(
-            timer_period_sec=self._state_pub_period, callback=self._publish_state
+        self._state_publisher_timer = rospy.Timer(
+            rospy.Duration(self._state_pub_period), 
+            self._publish_state
         )
 
         # Publish connection msg periodically
-        self._connection_publisher_timer = self.create_timer(
-            timer_period_sec=self._connection_pub_period, callback=self._publish_connection
+        self._connection_publisher_timer = rospy.Timer(
+            rospy.Duration(self._connection_pub_period), 
+            self._publish_connection
         )
 
         # Publish visualization msg periodically
-        self._visualization_publisher_timer = self.create_timer(
-            timer_period_sec=self._visualization_pub_period,
-            callback=self._publish_visualization,
-            callback_group=MutuallyExclusiveCallbackGroup(),
+        self._visualization_publisher_timer = rospy.Timer(
+            rospy.Duration(self._visualization_pub_period),
+            self._publish_visualization,
         )
 
         # Execute order state machine periodically
-        self._execute_order_timer = self.create_timer(
-            timer_period_sec=self._execute_order_period, callback=self._on_active_order
+        self._execute_order_timer = rospy.Timer(
+            rospy.Duration(self._execute_order_period), 
+            self._on_active_order
         )
 
     # ---- Robot to Master Control publish topics ----
 
-    def _publish_state(self):
+    def _publish_state(self, event):
         """Publish the current OrderState msg."""
-        self.logger.debug(f"Publishing state message {self._current_state}")
+        rospy.logdebug(f"Publishing state message {self._current_state}")
         self._current_state.header_id += 1
         self._current_state.timestamp = get_vda5050_ts()
-        self._publish_state_to_mc.publish(msg=self._current_state)
+        self._publish_state_to_mc.publish(self._current_state)
 
-    def _publish_connection(self):
+    def _publish_connection(self, event):
         """Publish the current Connection msg."""
-        self.logger.debug(f"Publishing connection message {self._current_connection}")
+        rospy.logdebug(f"Publishing connection message {self._current_connection}")
         self._current_connection.header_id += 1
         self._current_connection.timestamp = get_vda5050_ts()
-        self._current_connection.connection_state = VDAConnection.ONLINE
-        self._publish_connection_to_mc.publish(msg=self._current_connection)
+        self._current_connection.connection_state = VDAConnection.ONLINE.strip('"')
+        self._publish_connection_to_mc.publish(self._current_connection)
 
-    def _publish_visualization(self):
+    def _publish_visualization(self, event):
         """Publish the current Visualization msg."""
         self._current_visualization.header_id += 1
         self._current_visualization.timestamp = get_vda5050_ts()
@@ -429,9 +415,9 @@ class VDA5050Controller(Node):
         for k, v in partial_state.items():
             setattr(self._current_state, k, v)
 
-        self.logger.debug(f"State updated: '{self._current_state}'.")
+        rospy.logdebug(f"State updated: '{self._current_state}'.")
         if publish_now:
-            self._publish_state()
+            self._publish_state(None)
 
     # ---- Node, edge and action states helpers ----
 
@@ -519,7 +505,7 @@ class VDA5050Controller(Node):
 
     def _delete_action_states(self):
         """Delete instant actions array from current state."""
-        self.logger.debug("Deleting action states.")
+        rospy.logdebug("Deleting action states.")
         self._update_state({"action_states": []})
 
     def _get_action_status(self, action_id: str) -> str:
@@ -576,10 +562,10 @@ class VDA5050Controller(Node):
             ),
             None,
         )
-        self.logger.debug(f"Updating action state: {action_state}")
+        rospy.logdebug(f"Updating action state: {action_state}")
 
         if not action_state:
-            self.logger.error(
+            rospy.logerr(
                 f"Error while processing action state. Couldn't find action with id: '{action_id}'"
             )
             error = VDAError(
@@ -616,15 +602,17 @@ class VDA5050Controller(Node):
                 async calls (default is None).
 
         """
-        if async_call:
-            future = self._get_adapter_state_svc_cli.call_async(GetState.Request())
-            future.add_done_callback(
-                functools.partial(self._get_state_from_adapter_callback, action)
-            )
-            return
+        # Not available in ROS 1
+        # if async_call:
+        #     future = self._get_adapter_state_svc_cli.call_async(GetStateRequest())
+        #     future.add_done_callback(
+        #         functools.partial(self._get_state_from_adapter_callback, action)
+        #     )
+        #     return
 
-        order_state = self._get_adapter_state_svc_cli.call(GetState.Request())
+        order_state = self._get_adapter_state_svc_cli.call(GetStateRequest())
         self._update_state_from_adapter(order_state)
+
 
     def _get_state_from_adapter_callback(self, action: VDAAction, future: Future):
         """
@@ -639,7 +627,7 @@ class VDA5050Controller(Node):
         if action:
             self._update_action_status(action.action_id, VDACurrentAction.FINISHED)
         self._update_state_from_adapter(future.result())
-        self._publish_state()
+        self._publish_state(None)
 
     def _update_state_from_adapter(self, order_state: VDAOrderState):
         """
@@ -698,10 +686,10 @@ class VDA5050Controller(Node):
             return
 
         header_id = instant_actions.header_id
-        self.logger.info(f"Received instant_actions msg with id: '{header_id}'")
+        rospy.loginfo(f"Received instant_actions msg with id: '{header_id}'")
 
         for action in instant_actions.actions:
-            self.logger.info(
+            rospy.loginfo(
                 f"Processing action '{action.action_id}' of type '{action.action_type}'"
             )
 
@@ -720,13 +708,14 @@ class VDA5050Controller(Node):
                 self._cancel_action = action
                 continue
             elif action.action_type == "stateRequest":
-                self._update_action_status(action.action_id, VDACurrentAction.RUNNING)
+                self._update_action_status(action.action_id, VDACurrentAction.RUNNING.strip('"'))
                 self.get_state_from_adapter(async_call=True, action=action)
+                self._publish_state(None)
                 continue
             elif action.action_type == "factsheetRequest":
                 # Populate the current factsheet msg reading and requesting its info
                 self._populate_factsheet()
-                self._update_action_status(action.action_id, VDACurrentAction.FINISHED)
+                self._update_action_status(action.action_id, VDACurrentAction.FINISHED.strip('"'))
                 self._publish_factsheet()
                 continue
 
@@ -765,56 +754,34 @@ class VDA5050Controller(Node):
         if self._get_action_status(action.action_id) != VDACurrentAction.WAITING:
             return
 
-        goal_msg = ProcessVDAAction.Goal()
+        goal_msg = ProcessVDAActionGoal()
         goal_msg.action = action
 
         self._process_vda_action_act_cli.wait_for_server()
 
         # Send goal to action server
-        self.logger.info(
+        rospy.loginfo(
             f"VDA Action '{action.action_id}' of type '{action.action_type}' sent to adapter."
         )
         self._process_vda_action_goal_future = self._process_vda_action_act_cli.send_goal_async(
             goal=goal_msg, feedback_callback=self._process_vda_action_feedback_callback
         )
+        
+        self._process_vda_action_act_cli.send_goal(goal_msg, feedback_callback=self._process_vda_action_feedback_callback)
 
         self._update_action_status(action.action_id, VDACurrentAction.INITIALIZING)
-        # Register callback to be executed when the goal is accepted
-        self._process_vda_action_goal_future.add_done_callback(
-            functools.partial(self._process_vda_action_goal_response_callback, action)
-        )
 
-    def _process_vda_action_goal_response_callback(self, action: VDAAction, future: Future):
-        """
-        Response callback function for process VDA actions goal request.
+        self._process_vda_action_act_cli.wait_for_result()
 
-        Args:
-        ----
-            action (VDAAction): VDA Action sent as goal.
-            future (Future): Action response future.
+        action_result: ProcessVDAActionResult = self._process_vda_action_act_cli.get_result()
+        current_action: VDACurrentAction = action_result.result
+        self._process_vda_action_goal_handle_dict.pop(current_action.action_id)
+        self._update_action_status(current_action.action_id, current_action.action_status)
+        rospy.loginfo(f"VDA Action finished. Result: {current_action}")
 
-        """
-        _goal_handle = future.result()
-        if not _goal_handle.accepted:
-            self._update_action_status(
-                action_id=action.action_id, action_status=VDACurrentAction.FAILED
-            )
-            self.logger.info(
-                f"VDA Action '{action.action_id}' of type '{action.action_type}'"
-                " rejected by the adapter"
-            )
-            return
 
-        self._process_vda_action_goal_handle_dict[action.action_id] = _goal_handle
-        self.logger.info(
-            f"VDA Action '{action.action_id}' of type '{action.action_type}'"
-            " accepted by the adapter"
-        )
 
-        _get_result_future = _goal_handle.get_result_async()
-        _get_result_future.add_done_callback(self._process_vda_action_result_callback)
-
-    def _process_vda_action_feedback_callback(self, feedback_msg: ProcessVDAAction.Feedback):
+    def _process_vda_action_feedback_callback(self, feedback_msg: ProcessVDAActionFeedback):
         """
         Feedback callback function for process VDA actions goal request.
 
@@ -827,20 +794,6 @@ class VDA5050Controller(Node):
         current_action = feedback_msg.feedback.current_action
         self._update_action_status(current_action.action_id, current_action.action_status)
 
-    def _process_vda_action_result_callback(self, future: Future):
-        """
-        Process VDA actions goal request.
-
-        Args:
-        ----
-            future (Future): Action result future.
-
-        """
-        action_result: ProcessVDAAction.Result = future.result().result
-        current_action: VDACurrentAction = action_result.result
-        self._process_vda_action_goal_handle_dict.pop(current_action.action_id)
-        self._update_action_status(current_action.action_id, current_action.action_status)
-        self.logger.info(f"VDA Action finished. Result: {current_action}")
 
     # Order
 
@@ -858,7 +811,7 @@ class VDA5050Controller(Node):
             order (VDAOrder): VDA5050 Order message.
 
         """
-        self.logger.info(f"Received order with ID: '{order.order_id}'")
+        rospy.loginfo(f"Received order with ID: '{order.order_id}'")
 
         # Validate order msg
         msg_is_valid, error = self.order_msg_is_valid(order)
@@ -896,7 +849,7 @@ class VDA5050Controller(Node):
 
             if update_id_diff == 0:
                 # Same update id, discard the msg
-                self.logger.info(f"Order [{order.order_id}] discarded. Same order update id.")
+                rospy.loginfo(f"Order [{order.order_id}] discarded. Same order update id.")
                 return
             elif update_id_diff < 0 or not match_last_new_base_nodes:
                 # Reject if update id is lower or if last and new base nodes doesn't match
@@ -968,7 +921,7 @@ class VDA5050Controller(Node):
         )
 
         if has_nodes_and_edges:
-            self.logger.debug((
+            rospy.logdebug((
                 "Found nodes and edges while validating if there's an active order."
                 f" Nodes: {self._current_state.node_states}."
                 f" Edges: {self._current_state.edge_states}."
@@ -983,7 +936,7 @@ class VDA5050Controller(Node):
                     VDACurrentAction.FINISHED, VDACurrentAction.FAILED
                 ]
             ]
-            self.logger.debug((
+            rospy.logdebug((
                 "Found running actions while validating if there's an active order."
                 f" Actions: {running_actions}"
             ), throttle_duration_sec=5)
@@ -1031,7 +984,7 @@ class VDA5050Controller(Node):
 
         # Return False if node actions differ
         if len(last_node.actions) != len(stitch_node.actions):
-            self.logger.error("Error while validating stitch node: number of actions don't match")
+            rospy.logerr("Error while validating stitch node: number of actions don't match")
             return False
 
         # Evaluate all actions are equal and in the same order
@@ -1044,7 +997,7 @@ class VDA5050Controller(Node):
                 last_node_actions.blocking_type != stitch_node_actions.blocking_type or
                 last_node_actions.action_description != stitch_node_actions.action_description
             ):
-                self.logger.error((
+                rospy.logerr((
                     "Error while validating stitch node: actions don't match."
                     f" action on last node '{last_node_actions}' differs from "
                     f" action on stitch node '{stitch_node_actions}'"
@@ -1054,7 +1007,7 @@ class VDA5050Controller(Node):
             # If the action has different number of parameter return False
             if (len(last_node_actions.action_parameters) !=
                     len(stitch_node_actions.action_parameters)):
-                self.logger.error((
+                rospy.logerr((
                     "Error while validating stitch node: Number"
                     " of parameters on node actions differ"
                 ))
@@ -1066,7 +1019,7 @@ class VDA5050Controller(Node):
                 for last_node_action_action_parameter, stitch_node_action_action_parameter
                 in zip(last_node_actions.action_parameters, stitch_node_actions.action_parameters)
             ]):
-                self.logger.error((
+                rospy.logerr((
                     "Error while validating stitch node: Parameters"
                     " on one of the node actions differ."
                     f" Last node action parameters: '{last_node_actions.action_parameters}'"
@@ -1079,7 +1032,7 @@ class VDA5050Controller(Node):
         has_same_sequence_id = last_node.sequence_id == stitch_node.sequence_id
 
         if not has_same_node_id or not has_same_sequence_id:
-            self.logger.error(
+            rospy.logerr(
                 ("Error while validating stitch node: Node ID or Sequence ID mismatch")
             )
         # Calculate if both nodes positions are the same
@@ -1100,7 +1053,7 @@ class VDA5050Controller(Node):
         )
 
         if not has_same_node_position:
-            self.logger.error((
+            rospy.logerr((
                 "Error while validating stitch node: Node position mismatch."
                 f" Last node position '{last_node_position}'."
                 f" Stitch node position '{stitch_node_position}'."
@@ -1124,13 +1077,13 @@ class VDA5050Controller(Node):
                 STITCH: order's base is extended. It may include a new horizon.
 
         """
-        self.logger.info(
+        rospy.loginfo(
             f"Order '{order.order_id}' with update id '{order.order_update_id}' accepted!"
         )
 
         if mode == OrderAcceptModes.STITCH:
             # Accept STITCH order
-            self.logger.debug("Clearing horizon and appending new graph to the current base.")
+            rospy.logdebug("Clearing horizon and appending new graph to the current base.")
 
             # Clear horizon on current state
             # Avoid copying the stitching node twice
@@ -1240,7 +1193,7 @@ class VDA5050Controller(Node):
 
         # Update error array and publish it
         # These reject orders will be delete them when a valid order is accepted
-        self.logger.warn(f"Order rejected: {order_error.error_description}")
+        rospy.logwarn(f"Order rejected: {order_error.error_description}")
         self._update_state(
             {"errors": self._current_state.errors + [order_error]}, publish_now=True
         )
@@ -1256,7 +1209,7 @@ class VDA5050Controller(Node):
         When the cancel order action finishes, it publishes the updated state.
         """
         if not self._has_current_order():
-            self.logger.error(
+            rospy.logerr(
                 "cancelOrder action request failed. There is no active order running."
             )
             self._update_action_status(self._cancel_action.action_id, VDACurrentAction.FAILED)
@@ -1309,7 +1262,7 @@ class VDA5050Controller(Node):
         self._cancel_action = None
         self._current_node_actions = []
 
-        self.logger.info("Finished executing cancelOrder.")
+        rospy.loginfo("Finished executing cancelOrder.")
 
     def _canceling_order(self) -> bool:
         """
@@ -1324,7 +1277,7 @@ class VDA5050Controller(Node):
 
     # ---- Process order nodes / edges / actions ----
 
-    def _on_active_order(self):
+    def _on_active_order(self, event):
         """
         Execute order state machine.
 
@@ -1357,7 +1310,7 @@ class VDA5050Controller(Node):
 
         """
         # Remove node from node_states and update controller state
-        self.logger.info(f"Arrived to node: {node.node_id}")
+        rospy.loginfo(f"Arrived to node: {node.node_id}")
         self._update_state(
             {
                 "node_states": [
@@ -1371,12 +1324,12 @@ class VDA5050Controller(Node):
         )
 
         self._current_node_actions = node.actions
-        self.logger.info(
+        rospy.loginfo(
             f"Executing {len(self._current_node_actions)} actions of node: {node.node_id}."
         )
 
         if len(self._current_state.node_states) == 0:
-            self.logger.info(
+            rospy.loginfo(
                 f"Processing last order's node. Order {self._current_order.order_id} finished."
             )
         self._current_node_goal = None
@@ -1438,7 +1391,7 @@ class VDA5050Controller(Node):
 
         if not next_edge.released:
             if not self._current_state.new_base_request:
-                self.logger.warn("Next edge is part of the horizon. Stopping traversing of nodes.")
+                rospy.logwarn("Next edge is part of the horizon. Stopping traversing of nodes.")
                 self._update_state({"new_base_request": True}, publish_now=True)
             return
 
@@ -1450,11 +1403,11 @@ class VDA5050Controller(Node):
             if node.sequence_id == self._current_state.last_node_sequence_id + 2
         )
         if next_node != self._current_node_goal:
-            self.logger.info(f"Processing node: {next_node}")
+            rospy.loginfo(f"Processing node: {next_node}")
 
             self.send_adapter_navigate_to_node(edge=next_edge, node=next_node)
         else:
-            self.logger.error(f"{next_node} Already current goal")
+            rospy.logerr(f"{next_node} Already current goal")
     # ---- Navigate to node: send goals ----
 
     def send_adapter_navigate_to_node(self, edge: VDAEdge, node: VDANode):
@@ -1468,7 +1421,7 @@ class VDA5050Controller(Node):
 
         """
         # Create goal message with edge and node parameters
-        goal_msg = NavigateToNode.Goal()
+        goal_msg = NavigateToNodeGoal()
         goal_msg.edge = edge
         goal_msg.node = node
 
@@ -1476,53 +1429,15 @@ class VDA5050Controller(Node):
         self._navigate_to_node_act_cli.wait_for_server()
 
         # Send goal to action server
-        self.logger.info("Navigate to node goal request sent.")
+        rospy.loginfo("Navigate to node goal request sent.")
         self._current_node_goal = node
-        _send_goal_future = self._navigate_to_node_act_cli.send_goal_async(goal_msg)
-
-        # Register callback to be executed when the goal is accepted
-        _send_goal_future.add_done_callback(self._navigate_to_node_goal_response_callback)
-
-    def _navigate_to_node_goal_response_callback(self, future: Future):
-        """
-        Response callback function for navigate to node goal request.
-
-        Args:
-        ----
-            future (Future): Action response future.
-
-        """
-        self._navigate_to_node_goal_handle = future.result()
-        if not self._navigate_to_node_goal_handle.accepted:
-            self.logger.error("Navigate to node goal request rejected by adapter. Trying again.")
-            self._navigate_to_node_goal_handle = None
-            self._current_node_goal = None
-            return
-
-        self.logger.info("Navigate to node goal request accepted by adapter.")
-        # TODO: Execute edge actions
-
-        # Add callback to handle action result
-        _get_result_future = self._navigate_to_node_goal_handle.get_result_async()
-        _get_result_future.add_done_callback(self._navigate_to_node_result_callback)
-
-    def _navigate_to_node_result_callback(self, future: Future):
-        """
-        Process VDA actions goal request.
-
-        This callback is in charge of triggering next order's node execution.
-
-        Args:
-        ----
-            future (Future): Action result future.
-
-        """
-        # TODO: Check when the goal fails
-        self._navigate_to_node_goal_handle = None
+        self._navigate_to_node_act_cli.send_goal(goal_msg)
 
         # When the order is cancelled, this callback should avoid continuing its logic
         if self._canceling_order():
             return
+        
+        self._navigate_to_node_act_cli.wait_for_result()
 
         last_edge = next(
             edge
@@ -1585,28 +1500,26 @@ class VDA5050Controller(Node):
         """
         type_specification = VDATypeSpecification()
 
-        type_specification.series_name = read_str_parameter(
-            self, "factsheet.type_specification.series_name", "robot_number"
+        type_specification.series_name = rospy.get_param(
+            "factsheet.type_specification.series_name", "robot_number"
         )
-        type_specification.series_description = read_str_parameter(
-            self, "factsheet.type_specification.series_description", ""
+        type_specification.series_description = rospy.get_param(
+            "factsheet.type_specification.series_description", ""
         )
-        type_specification.agv_kinematic = read_str_parameter(
-            self, "factsheet.type_specification.agv_kinematic", VDATypeSpecification.OMNI
+        type_specification.agv_kinematic = rospy.get_param(
+            "factsheet.type_specification.agv_kinematic", VDATypeSpecification.OMNI
         )
-        type_specification.agv_class = read_str_parameter(
-            self, "factsheet.type_specification.agv_class", VDATypeSpecification.CARRIER
+        type_specification.agv_class = rospy.get_param(
+            "factsheet.type_specification.agv_class", VDATypeSpecification.CARRIER
         )
-        type_specification.max_load_mass = read_double_parameter(
-            self, "factsheet.type_specification.max_load_mass", 0.0
+        type_specification.max_load_mass = rospy.get_param(
+            "factsheet.type_specification.max_load_mass", 0.0
         )
-        type_specification.localization_types = read_str_array_parameter(
-            self,
+        type_specification.localization_types = rospy.get_param(
             "factsheet.type_specification.localization_types",
             [VDATypeSpecification.REFLECTOR],
         )
-        type_specification.navigation_types = read_str_array_parameter(
-            self,
+        type_specification.navigation_types = rospy.get_param(
             "factsheet.type_specification.navigation_types",
             [VDATypeSpecification.AUTONOMOUS],
         )
@@ -1628,7 +1541,7 @@ class VDA5050Controller(Node):
         }
 
         for key, val in parameters_physical.items():
-            value = read_double_parameter(self, "factsheet.physical_parameters." + key, val)
+            value = rospy.get_param("factsheet.physical_parameters." + key, val)
             setattr(physical_parameters, key, value)
 
         return physical_parameters
@@ -1650,13 +1563,13 @@ class VDA5050Controller(Node):
             }
 
             for key, val in parameters_string_lens.items():
-                value = read_int_parameter(
-                    self, "factsheet.protocol_limits.max_string_lens." + key, val
+                value = rospy.get_param(
+                    "factsheet.protocol_limits.max_string_lens." + key, val
                 )
                 setattr(string_lens, key, value)
 
-            string_lens.id_numerical_only = read_bool_parameter(
-                self, "factsheet.protocol_limits.max_string_lens.id_numerical_only", False
+            string_lens.id_numerical_only = rospy.get_param(
+                "factsheet.protocol_limits.max_string_lens.id_numerical_only", False
             )
             return string_lens
 
@@ -1683,8 +1596,8 @@ class VDA5050Controller(Node):
             }
 
             for key, val in parameters_array_lens.items():
-                value = read_int_parameter(
-                    self, "factsheet.protocol_limits.max_array_lens." + key, val
+                value = rospy.get_param(
+                    "factsheet.protocol_limits.max_array_lens." + key, val
                 )
                 setattr(array_lens, key, value)
             return array_lens
@@ -1700,7 +1613,7 @@ class VDA5050Controller(Node):
             }
 
             for key, val in parameters_timing.items():
-                value = read_double_parameter(self, "factsheet.protocol_limits.timing." + key, val)
+                value = rospy.get_param("factsheet.protocol_limits.timing." + key, val)
                 setattr(timing, key, value)
             return timing
 
@@ -1738,41 +1651,41 @@ class VDA5050Controller(Node):
             """
             wheel_definitions = []
             base_key = "factsheet.agv_geometry.wheel_definitions."
-            wheel_definitions_ids = read_str_array_parameter(self, base_key + "ids", [])
+            wheel_definitions_ids = rospy.get_param(base_key + "ids", [])
             for wheel_id in wheel_definitions_ids:
                 wheel_key = base_key + "wheel_" + wheel_id + "."
                 wheel_definition = VDAWheelDefinition()
 
-                wheel_definition.type = read_str_parameter(
-                    self, wheel_key + "type", VDAWheelDefinition.DRIVE
+                wheel_definition.type = rospy.get_param(
+                    wheel_key + "type", VDAWheelDefinition.DRIVE
                 )
-                wheel_definition.is_active_driven = read_bool_parameter(
-                    self, wheel_key + "is_active_driven", True
+                wheel_definition.is_active_driven = rospy.get_param(
+                    wheel_key + "is_active_driven", True
                 )
-                wheel_definition.is_active_steered = read_bool_parameter(
-                    self, wheel_key + "is_active_steered", False
+                wheel_definition.is_active_steered = rospy.get_param(
+                    wheel_key + "is_active_steered", False
                 )
 
                 # Position
-                wheel_definition.position.x = read_double_parameter(
-                    self, wheel_key + "position.x", 0.0
+                wheel_definition.position.x = rospy.get_param(
+                    wheel_key + "position.x", 0.0
                 )
-                wheel_definition.position.y = read_double_parameter(
-                    self, wheel_key + "position.y", 0.0
+                wheel_definition.position.y = rospy.get_param(
+                    wheel_key + "position.y", 0.0
                 )
-                wheel_definition.position.theta = read_double_parameter(
-                    self, wheel_key + "position.theta", 0.0
+                wheel_definition.position.theta = rospy.get_param(
+                    wheel_key + "position.theta", 0.0
                 )
 
-                wheel_definition.diameter = read_double_parameter(
-                    self, wheel_key + "diameter", 0.0
+                wheel_definition.diameter = rospy.get_param(
+                    wheel_key + "diameter", 0.0
                 )
-                wheel_definition.width = read_double_parameter(self, wheel_key + "width", 0.0)
-                wheel_definition.center_displacement = read_double_parameter(
-                    self, wheel_key + "center_displacement", 0.0
+                wheel_definition.width = rospy.get_param(self, wheel_key + "width", 0.0)
+                wheel_definition.center_displacement = rospy.get_param(
+                    wheel_key + "center_displacement", 0.0
                 )
-                wheel_definition.constraints = read_str_parameter(
-                    self, wheel_key + "constraints", ""
+                wheel_definition.constraints = rospy.get_param(
+                    wheel_key + "constraints", ""
                 )
                 wheel_definitions.append(wheel_definition)
             return wheel_definitions
@@ -1789,15 +1702,15 @@ class VDA5050Controller(Node):
             """
             envelopes2d = []
             base_key = "factsheet.agv_geometry.envelopes2d."
-            envelop2d_ids = read_str_array_parameter(self, base_key + "ids", [])
+            envelop2d_ids = rospy.get_param(base_key + "ids", [])
             for envelop_id in envelop2d_ids:
                 envelop2d_key = base_key + "envelop2d_" + envelop_id + "."
                 envelop2d = VDAEnvelope2D()
 
-                envelop2d.set = read_str_parameter(self, envelop2d_key + "set", "")
-                envelop2d.description = read_str_parameter(self, envelop2d_key + "description", "")
-                polygon_points = read_str_array_parameter(
-                    self, envelop2d_key + "polygon_points", []
+                envelop2d.set = rospy.get_param(envelop2d_key + "set", "")
+                envelop2d.description = rospy.get_param(envelop2d_key + "description", "")
+                polygon_points = rospy.get_param(
+                    envelop2d_key + "polygon_points", []
                 )
                 for polygon_pair in polygon_points:
                     try:
@@ -1814,7 +1727,7 @@ class VDA5050Controller(Node):
                             "The format of this field should be ...polygon_points: "
                             "['x1,y1', 'x2,y2']"
                         )
-                        self.logger.error(error_msg)
+                        rospy.logerr(error_msg)
                         continue
 
                 envelopes2d.append(envelop2d)
@@ -1829,7 +1742,7 @@ class VDA5050Controller(Node):
             """
             envelopes3d = []
             base_key = "factsheet.agv_geometry.envelopes3d."
-            envelop3d_ids = read_str_array_parameter(self, base_key + "ids", [])
+            envelop3d_ids = rospy.get_param(self, base_key + "ids", [])
             for envelop_id in envelop3d_ids:
                 envelop3d_key = base_key + "envelop3d_" + envelop_id + "."
                 envelop3d = VDAEnvelope3D()
@@ -1843,7 +1756,7 @@ class VDA5050Controller(Node):
                 }
 
                 for key, val in parameters_envelop3d.items():
-                    value = read_str_parameter(self, envelop3d_key + key, val)
+                    value = rospy.get_param(envelop3d_key + key, val)
                     setattr(envelop3d, key, value)
 
                 envelopes3d.append(envelop3d)
@@ -1868,7 +1781,7 @@ class VDA5050Controller(Node):
             """
             load_sets = []
             base_key = "factsheet.load_specification.load_sets."
-            load_sets_ids = read_str_array_parameter(self, base_key + "ids", [])
+            load_sets_ids = rospy.get_param(base_key + "ids", [])
 
             for load_sets_id in load_sets_ids:
                 load_set = VDALoadSet()
@@ -1894,46 +1807,46 @@ class VDA5050Controller(Node):
 
                 for key, val in parameters_load_set.items():
                     if type(val) == str:
-                        value = read_str_parameter(self, load_set_key + key, val)
+                        value = rospy.get_param(load_set_key + key, val)
                     else:
-                        value = read_double_parameter(self, load_set_key + key, val)
+                        value = rospy.get_param(load_set_key + key, val)
                     setattr(load_set, key, value)
 
-                load_set.load_positions = read_str_array_parameter(
-                    self, load_set_key + "load_positions", []
+                load_set.load_positions = rospy.get_param(
+                    load_set_key + "load_positions", []
                 )
 
                 # Load dimensions
-                load_set.load_dimensions.length = read_double_parameter(
-                    self, load_set_key + "load_dimensions.length", 0.0
+                load_set.load_dimensions.length = rospy.get_param(
+                    load_set_key + "load_dimensions.length", 0.0
                 )
-                load_set.load_dimensions.width = read_double_parameter(
-                    self, load_set_key + "load_dimensions.width", 0.0
+                load_set.load_dimensions.width = rospy.get_param(
+                    load_set_key + "load_dimensions.width", 0.0
                 )
-                load_set.load_dimensions.height = read_double_parameter(
-                    self, load_set_key + "load_dimensions.height", 0.0
+                load_set.load_dimensions.height = rospy.get_param(
+                    load_set_key + "load_dimensions.height", 0.0
                 )
 
                 # Bounding Box Reference
-                load_set.bounding_box_reference.x = read_double_parameter(
-                    self, load_set_key + "bounding_box_reference.x", 0.0
+                load_set.bounding_box_reference.x = rospy.get_param(
+                    load_set_key + "bounding_box_reference.x", 0.0
                 )
-                load_set.bounding_box_reference.y = read_double_parameter(
-                    self, load_set_key + "bounding_box_reference.y", 0.0
+                load_set.bounding_box_reference.y = rospy.get_param(
+                    load_set_key + "bounding_box_reference.y", 0.0
                 )
-                load_set.bounding_box_reference.z = read_double_parameter(
-                    self, load_set_key + "bounding_box_reference.z", 0.0
+                load_set.bounding_box_reference.z = rospy.get_param(
+                    load_set_key + "bounding_box_reference.z", 0.0
                 )
-                load_set.bounding_box_reference.theta = read_double_parameter(
-                    self, load_set_key + "bounding_box_reference.theta", 0.0
+                load_set.bounding_box_reference.theta = rospy.get_param(
+                    load_set_key + "bounding_box_reference.theta", 0.0
                 )
 
                 load_sets.append(load_set)
 
             return load_sets
 
-        load_specification.load_positions = read_str_array_parameter(
-            self, "factsheet.load_specification.load_positions", []
+        load_specification.load_positions = rospy.get_param(
+            "factsheet.load_specification.load_positions", []
         )
         load_specification.load_sets = _read_load_sets()
 

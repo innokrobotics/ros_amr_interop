@@ -32,23 +32,17 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 # ROS dependencies
-import rclpy
-from rclpy.executors import MultiThreadedExecutor
+import rospy
 
 from vda5050_connector_py.vda5050_controller import VDA5050Controller
 
 
 def main(args=None):
-    rclpy.init(args=args)
 
     vda5050_controller_node = VDA5050Controller()
-    executor = MultiThreadedExecutor()
-    executor.add_node(vda5050_controller_node)
+    rospy.spin()
 
-    executor.spin()
-
-    vda5050_controller_node.destroy_node()
-    rclpy.shutdown()
+    
 
 
 if __name__ == "__main__":
