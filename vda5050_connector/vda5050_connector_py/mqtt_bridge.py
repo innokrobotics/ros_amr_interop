@@ -34,6 +34,7 @@
 # Python dependencies
 from paho.mqtt import client as mqtt_client
 from paho.mqtt.client import error_string
+from paho.mqtt.client import CallbackAPIVersion
 import copy
 import json
 import ssl
@@ -213,22 +214,23 @@ class MQTTBridge(Node):
             self, "manufacturer_name", "robots"
         )
         self._serial_number = read_str_parameter(self, "serial_number", "robot_1")
+        self._vda5050_major_version = read_str_parameter(self, "vda5050_major_version", "v2")
 
         # Configure MQTT
-        self.mqtt_client = mqtt_client.Client()
+        self.mqtt_client = mqtt_client.Client(callback_api_version=mqtt_client.CallbackAPIVersion.VERSION1)
         self.mqtt_client.on_connect = self.on_connect_mqtt
         self.mqtt_client.on_message = self.on_message_mqtt
         self.mqtt_client.on_disconnect = self.on_disconnect_mqtt
 
         # Enable TLS if username is provided
         if mqtt_username:
-            self.mqtt_client.tls_set(
-                ca_certs=os.getenv(
-                    key="VDA5050_CONNECTOR_TLS_CA_CERT",
-                    default="/etc/ssl/certs/ca-certificates.crt",
-                ),
-                tls_version=ssl.PROTOCOL_TLSv1_2,
-            )
+            # self.mqtt_client.tls_set(
+            #     ca_certs=os.getenv(
+            #         key="VDA5050_CONNECTOR_TLS_CA_CERT",
+            #         default="/etc/ssl/certs/ca-certificates.crt",
+            #     ),
+            #     tls_version=ssl.PROTOCOL_TLSv1_2,
+            # )
             self.mqtt_client.username_pw_set(
                 username=mqtt_username, password=mqtt_password
             )
@@ -278,6 +280,7 @@ class MQTTBridge(Node):
                     manufacturer=self._manufacturer_name,
                     serial_number=self._serial_number,
                     topic="order",
+                    major_version=self._vda5050_major_version,
                 )
             )
             self.mqtt_client.subscribe(
@@ -285,6 +288,7 @@ class MQTTBridge(Node):
                     manufacturer=self._manufacturer_name,
                     serial_number=self._serial_number,
                     topic="instantActions",
+                    major_version=self._vda5050_major_version
                 )
             )
             self._publish_connection(
@@ -351,6 +355,7 @@ class MQTTBridge(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="state",
+                major_version=self._vda5050_major_version
             ),
             callback=self._publish_state,
             qos_profile=10,
@@ -362,6 +367,7 @@ class MQTTBridge(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="connection",
+                major_version=self._vda5050_major_version,
             ),
             callback=self._publish_connection,
             qos_profile=10,
@@ -373,6 +379,7 @@ class MQTTBridge(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="visualization",
+                major_version=self._vda5050_major_version,
             ),
             callback=self._publish_visualization,
             qos_profile=10,
@@ -384,6 +391,7 @@ class MQTTBridge(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="order",
+                major_version=self._vda5050_major_version,
             ),
             qos_profile=10,
         )
@@ -394,6 +402,7 @@ class MQTTBridge(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="instantActions",
+                major_version=self._vda5050_major_version,
             ),
             qos_profile=10,
         )
@@ -424,6 +433,7 @@ class MQTTBridge(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="order",
+                major_version=self._vda5050_major_version,
             )
         )
         self.mqtt_client.unsubscribe(
@@ -431,6 +441,7 @@ class MQTTBridge(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="instantActions",
+                major_version=self._vda5050_major_version,
             )
         )
 
@@ -463,6 +474,7 @@ class MQTTBridge(Node):
             manufacturer=self._manufacturer_name,
             serial_number=self._serial_number,
             topic="state",
+            major_version=self._vda5050_major_version,
         )
         self._publish_to_topic(msg, topic)
 
@@ -485,6 +497,7 @@ class MQTTBridge(Node):
             manufacturer=self._manufacturer_name,
             serial_number=self._serial_number,
             topic="connection",
+            major_version=self._vda5050_major_version,
         )
         self._publish_to_topic(msg, topic)
 
@@ -501,5 +514,6 @@ class MQTTBridge(Node):
             manufacturer=self._manufacturer_name,
             serial_number=self._serial_number,
             topic="visualization",
+            major_version=self._vda5050_major_version,
         )
         self._publish_to_topic(msg, topic)

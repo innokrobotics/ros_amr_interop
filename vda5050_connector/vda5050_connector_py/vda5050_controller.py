@@ -291,6 +291,7 @@ class VDA5050Controller(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="order",
+                major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
             callback=self.process_order,
             qos_profile=10,
@@ -303,6 +304,7 @@ class VDA5050Controller(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="instantActions",
+                major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
             callback=self.process_instant_actions,
             qos_profile=10,
@@ -317,6 +319,7 @@ class VDA5050Controller(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="state",
+                major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
             qos_profile=10,
         )
@@ -328,6 +331,7 @@ class VDA5050Controller(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="connection",
+                major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
             qos_profile=10,
         )
@@ -339,6 +343,7 @@ class VDA5050Controller(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="visualization",
+                major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
             qos_profile=10,
         )
@@ -350,6 +355,7 @@ class VDA5050Controller(Node):
                 manufacturer=self._manufacturer_name,
                 serial_number=self._serial_number,
                 topic="factsheet",
+                major_version=f"v{self._protocol_version.split('.')[0]}",
             ),
             qos_profile=10,
         )
@@ -665,7 +671,7 @@ class VDA5050Controller(Node):
                 "distance_since_last_node": order_state.state.distance_since_last_node,
                 "battery_state": order_state.state.battery_state,
                 "errors": current_errors + order_state.state.errors,
-                "informations": order_state.state.informations
+                "information": order_state.state.information
             }
         )
 
